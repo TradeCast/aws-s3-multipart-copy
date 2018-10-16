@@ -29,13 +29,13 @@ const init = function (aws_s3_object, initialized_logger) {
  * (note that copy_part_size_bytes, copied_object_permissions, expiration_period are optional and will be assigned with default values if not given)
  * @param {*} request_context optional parameter for logging purposes
  */
-const copyObjectMultipart = async function ({ source_bucket, object_key, destination_bucket, copied_object_name, object_size, copy_part_size_bytes, copied_object_permissions, expiration_period, server_side_encryption, content_type }, request_context) {
+const copyObjectMultipart = async function ({ source_bucket, object_key, destination_bucket, copied_object_name, object_size, copy_part_size_bytes, copied_object_permissions, expiration_period, server_side_encryption, content_type, copy_part_retry_count }, request_context) {
     const upload_id = await initiateMultipartCopy(destination_bucket, copied_object_name, copied_object_permissions, expiration_period, request_context, server_side_encryption, content_type);
     const partitionsRangeArray = calculatePartitionsRangeArray(object_size, copy_part_size_bytes);
     const copyPartFunctionsArray = [];
 
     partitionsRangeArray.forEach((partitionRange, index) => {
-        copyPartFunctionsArray.push(copyPart(source_bucket, destination_bucket, index + 1, object_key, partitionRange, copied_object_name, upload_id));
+        copyPartFunctionsArray.push(copyPart(source_bucket, destination_bucket, index + 1, object_key, partitionRange, copied_object_name, upload_id, copy_part_retry_count));
     });
 
     return Promise.all(copyPartFunctionsArray)
@@ -71,7 +71,7 @@ function initiateMultipartCopy(destination_bucket, copied_object_name, copied_ob
         });
 }
 
-function copyPart(source_bucket, destination_bucket, part_number, object_key, partition_range, copied_object_name, upload_id) {
+function copyPart(source_bucket, destination_bucket, part_number, object_key, partition_range, copied_object_name, upload_id, retry_count) {
     const encodedSourceKey = encodeURIComponent(path.join(source_bucket, object_key));
     const params = {
         Bucket: destination_bucket,
@@ -88,6 +88,9 @@ function copyPart(source_bucket, destination_bucket, part_number, object_key, pa
             return Promise.resolve(result);
         })
         .catch((err) => {
+            if (retry_count > 0) {
+                return copyPart(source_bucket, destination_bucket, part_number, object_key, partition_range, copied_object_name, upload_id, retry_count - 1);
+            }
             logger.error(`CopyPart ${part_number} Failed: ${JSON.stringify(err)}`);
             return Promise.reject(err);
         })
